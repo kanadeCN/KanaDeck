@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+   备份规则（Android 11 及以下）。
+   加密配置里的 Keystore 密钥不会被备份，恢复后无法解密，所以排除它。
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="secure_settings.xml" />
+</full-backup-content>

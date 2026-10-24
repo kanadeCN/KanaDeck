@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+   数据提取规则（Android 12+）：云备份 + 换机迁移。
+   加密配置依赖本机 Keystore，备份恢复后无法解密，所以排除它。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="secure_settings.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="secure_settings.xml" />
+    </device-transfer>
+</data-extraction-rules>
