@@ -27,4 +27,7 @@ interface NoteDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(notes: List<Note>)
+
+    @Query("DELETE FROM notes WHERE path NOT IN (:paths)")
+    suspend fun deleteNotIn(paths: List<String>)
 }

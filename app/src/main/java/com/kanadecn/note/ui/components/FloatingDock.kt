@@ -31,9 +31,6 @@ enum class DockTab(
     MISTAKES(AppRoute.MISTAKES, "错题", Icons.Filled.Warning),
 }
 
-/**
- * dock 的所有尺寸参数集中在这里，全局统一。
- */
 object DockDefaults {
     val HorizontalPadding = 24.dp
     val VerticalPadding = 12.dp
@@ -45,27 +42,29 @@ object DockDefaults {
     val IconTextSpacing = 6.dp
     val ItemSpacing = 6.dp
     val SurfacePadding = 6.dp
+
+    /** 顶层页面底部需要给 dock 留出的空间 */
+    val ContentBottomPadding = 96.dp
 }
 
 /**
- * 作为 Scaffold 的 bottomBar 使用：
- * 高度由 Scaffold 自动测量，页面通过 innerPadding 统一让位。
+ * 不参与布局的悬浮 dock：
+ * 隐藏时只做 alpha + 位移（GPU 层），不会引起内容重新测量，动画更顺。
  */
 @Composable
-fun DockBar(
+fun DockOverlay(
     visible: Boolean,
     selected: DockTab,
     onSelect: (DockTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 注意：这里只做视觉上的隐藏，不改变布局高度，避免页面上下跳动
     val alpha by animateFloatAsState(
         targetValue = if (visible) 1f else 0f,
         animationSpec = tween(200),
         label = "dockAlpha",
     )
     val offsetY by animateDpAsState(
-        targetValue = if (visible) 0.dp else 16.dp,
+        targetValue = if (visible) 0.dp else 24.dp,
         animationSpec = tween(200),
         label = "dockOffsetY",
     )
@@ -73,7 +72,6 @@ fun DockBar(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .navigationBarsPadding()
             .padding(
                 horizontal = DockDefaults.HorizontalPadding,
                 vertical = DockDefaults.VerticalPadding,

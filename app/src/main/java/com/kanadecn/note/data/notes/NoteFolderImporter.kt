@@ -25,6 +25,8 @@ class NoteFolderImporter(
 
     fun savedFolderName(): String? = noteFolderStore.savedName()
 
+    fun savedFolderUri(): Uri? = noteFolderStore.savedUri()
+
     suspend fun import(uri: Uri): ImportOutcome = withContext(Dispatchers.IO) {
         runCatching {
             context.contentResolver.takePersistableUriPermission(

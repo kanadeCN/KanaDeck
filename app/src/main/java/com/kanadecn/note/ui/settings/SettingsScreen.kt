@@ -18,12 +18,12 @@ import androidx.compose.ui.unit.dp
 import com.kanadecn.note.data.notes.NoteFolderImporter
 import com.kanadecn.note.data.notes.NoteRepository
 import com.kanadecn.note.data.remote.AiClient
-import com.kanadecn.note.data.remote.FailureReason
 import com.kanadecn.note.data.remote.ModelListResult
 import com.kanadecn.note.data.settings.AiProvider
 import com.kanadecn.note.data.settings.LlmSettings
 import com.kanadecn.note.data.settings.SecureSettingsStore
 import com.kanadecn.note.data.settings.ThemeMode
+import com.kanadecn.note.ui.components.failureMessage
 import com.kanadecn.note.ui.theme.appColors
 import kotlinx.coroutines.launch
 
@@ -47,6 +47,7 @@ fun SettingsScreen(
     var selectedProvider by remember { mutableStateOf(AiProvider.fromBaseUrl(initial.baseUrl)) }
     var apiKey by remember { mutableStateOf(initial.apiKey) }
     var selectedModel by remember { mutableStateOf(initial.model) }
+    var manualModel by remember { mutableStateOf("") }
 
     var availableModels by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoadingModels by remember { mutableStateOf(false) }
@@ -215,6 +216,7 @@ fun SettingsScreen(
                             onClick = {
                                 selectedProvider = provider
                                 providerMenuExpanded = false
+                                manualModel = ""
                                 resetModelState()
                             },
                         )
@@ -328,6 +330,7 @@ fun SettingsScreen(
                             text = { Text(modelId) },
                             onClick = {
                                 selectedModel = modelId
+                                manualModel = ""
                                 modelMenuExpanded = false
                                 saveMessage = null
                                 saveError = null
@@ -337,6 +340,21 @@ fun SettingsScreen(
                     }
                 }
             }
+
+            OutlinedTextField(
+                value = manualModel,
+                onValueChange = {
+                    manualModel = it
+                    saveMessage = null
+                    saveError = null
+                    saveErrorDetail = null
+                },
+                label = { Text("手动输入模型（可选）") },
+                placeholder = { Text("列表里没有就填这里") },
+                supportingText = { Text("填了就以这里为准") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
 
             // ===== 测试并保存（合并） =====
             Button(
@@ -351,11 +369,12 @@ fun SettingsScreen(
                             when (val result = aiClient.listModels(selectedProvider.baseUrl, apiKey)) {
                                 is ModelListResult.Success -> {
                                     availableModels = result.models
-                                    val modelToUse = selectedModel
-                                        .takeIf { result.models.contains(it) }
-                                        ?: result.models.firstOrNull()
+                                    val modelToUse = manualModel.trim().ifBlank {
+                                        selectedModel.takeIf { result.models.contains(it) }
+                                            ?: result.models.firstOrNull().orEmpty()
+                                    }
 
-                                    if (modelToUse.isNullOrBlank()) {
+                                    if (modelToUse.isBlank()) {
                                         saveError = "没有可用模型"
                                     } else {
                                         selectedModel = modelToUse
@@ -465,15 +484,3 @@ private fun ThemeMode.label(): String = when (this) {
     ThemeMode.DARK -> "深色"
 }
 
-private fun failureMessage(reason: FailureReason): String = when (reason) {
-    FailureReason.INVALID_URL -> "Base URL 格式不正确"
-    FailureReason.INSECURE_URL -> "只允许 https:// 地址"
-    FailureReason.UNAUTHORIZED -> "认证失败：API Key 无效或无权限"
-    FailureReason.NOT_FOUND -> "地址不对（404），检查服务商"
-    FailureReason.BAD_REQUEST -> "请求被拒绝（400），检查模型"
-    FailureReason.RATE_LIMIT -> "请求过于频繁（429），稍后再试"
-    FailureReason.SERVER -> "服务端错误（5xx），稍后再试"
-    FailureReason.TIMEOUT -> "连接超时，检查网络"
-    FailureReason.NETWORK -> "网络错误，检查网络"
-    FailureReason.UNKNOWN -> "未知错误"
-}

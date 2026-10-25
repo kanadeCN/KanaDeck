@@ -1,9 +1,13 @@
 package com.kanadecn.note.data.remote
 
+import android.util.Base64
+import com.kanadecn.note.data.settings.LlmSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -17,6 +21,24 @@ sealed interface ModelListResult {
         val reason: FailureReason,
         val detail: String? = null,
     ) : ModelListResult
+}
+
+data class RecognizedMistake(
+    val question: String,
+    val myAnswer: String,
+    val correctAnswer: String,
+    val isCorrect: Boolean,
+    val errorType: String,
+    val knowledgePoint: String,
+    val explanation: String,
+)
+
+sealed interface MistakeRecognitionResult {
+    data class Success(val data: RecognizedMistake) : MistakeRecognitionResult
+    data class Failure(
+        val reason: FailureReason,
+        val detail: String? = null,
+    ) : MistakeRecognitionResult
 }
 
 enum class FailureReason {
@@ -39,6 +61,13 @@ enum class FailureReason {
 class AiClient(
     private val client: OkHttpClient = defaultClient(),
 ) {
+
+    // 识图比拉模型列表慢，单独用更长超时
+    private val recognitionClient: OkHttpClient = client.newBuilder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
+        .callTimeout(90, TimeUnit.SECONDS)
+        .build()
 
     /**
      * 拉取可用模型：GET {baseUrl}/models。
@@ -95,6 +124,266 @@ class AiClient(
                 )
             }
         }
+
+    /**
+     * 把错题图片发给多模态模型，返回结构化结果。
+     * OpenAI 兼容走 /chat/completions，Claude 走 /messages。
+     */
+    suspend fun recognizeMistake(
+        settings: LlmSettings,
+        imageJpeg: ByteArray,
+    ): MistakeRecognitionResult = withContext(Dispatchers.IO) {
+        val baseUrl = settings.baseUrl.trim().trimEnd('/')
+        if (baseUrl.isBlank() || !baseUrl.startsWith("https://", ignoreCase = true)) {
+            return@withContext MistakeRecognitionResult.Failure(insecureOrInvalid(baseUrl))
+        }
+
+        val isAnthropic = baseUrl.contains("anthropic.com", ignoreCase = true)
+        val endpoint = if (isAnthropic) "$baseUrl/messages" else "$baseUrl/chat/completions"
+        val payload = if (isAnthropic) {
+            anthropicPayload(settings.model, imageJpeg)
+        } else {
+            openAiPayload(settings.model, imageJpeg)
+        }
+
+        val request = try {
+            Request.Builder()
+                .url(endpoint)
+                .withAuth(baseUrl, settings.apiKey)
+                .post(payload.toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+        } catch (_: IllegalArgumentException) {
+            return@withContext MistakeRecognitionResult.Failure(FailureReason.INVALID_URL)
+        }
+
+        try {
+            recognitionClient.newCall(request).execute().use { response ->
+                val body = runCatching { response.body?.string() }.getOrNull()
+                if (!response.isSuccessful) {
+                    val (reason, detail) = mapFailure(response.code, body, settings.apiKey)
+                    return@use MistakeRecognitionResult.Failure(reason, detail)
+                }
+
+                val contentText = extractContentText(body, isAnthropic)
+                val reasoningText = if (isAnthropic) "" else extractReasoningText(body)
+                val json = extractJsonObject(contentText)
+                    ?: extractJsonObject(reasoningText)
+                if (json == null) {
+                    val finishReason = extractFinishReason(body)
+                    val raw = contentText.ifBlank { reasoningText }
+                        .ifBlank { body.orEmpty() }
+                        .sanitizeForDisplay(settings.apiKey)
+
+                    val detail = buildString {
+                        append("模型没有返回可解析的 JSON")
+                        if (!finishReason.isNullOrBlank()) {
+                            append("（finish_reason=")
+                            append(finishReason)
+                            append("）")
+                        }
+                        if (contentText.isBlank()) append("；content 为空")
+                        if (raw.isNotBlank()) {
+                            append("；原始返回：")
+                            append(raw)
+                        }
+                    }
+                    MistakeRecognitionResult.Failure(FailureReason.UNKNOWN, detail)
+                } else {
+                    MistakeRecognitionResult.Success(parseRecognized(json))
+                }
+            }
+        } catch (e: InterruptedIOException) {
+            MistakeRecognitionResult.Failure(
+                FailureReason.TIMEOUT,
+                e.message?.sanitizeForDisplay(settings.apiKey),
+            )
+        } catch (e: IOException) {
+            MistakeRecognitionResult.Failure(
+                FailureReason.NETWORK,
+                e.message?.sanitizeForDisplay(settings.apiKey),
+            )
+        }
+    }
+
+    private fun openAiPayload(model: String, imageJpeg: ByteArray): String {
+        val dataUrl = "data:image/jpeg;base64," + Base64.encodeToString(imageJpeg, Base64.NO_WRAP)
+        return JSONObject().apply {
+            put("model", model.trim())
+            put("max_tokens", 8192)
+            put(
+                "messages",
+                JSONArray().apply {
+                    put(
+                        JSONObject().apply {
+                            put("role", "system")
+                            put("content", PromptTemplates.MISTAKE_SYSTEM)
+                        },
+                    )
+                    put(
+                        JSONObject().apply {
+                            put("role", "user")
+                            put(
+                                "content",
+                                JSONArray().apply {
+                                    put(
+                                        JSONObject().apply {
+                                            put("type", "text")
+                                            put("text", PromptTemplates.MISTAKE_USER)
+                                        },
+                                    )
+                                    put(
+                                        JSONObject().apply {
+                                            put("type", "image_url")
+                                            put(
+                                                "image_url",
+                                                JSONObject().put("url", dataUrl),
+                                            )
+                                        },
+                                    )
+                                },
+                            )
+                        },
+                    )
+                },
+            )
+        }.toString()
+    }
+
+    private fun anthropicPayload(model: String, imageJpeg: ByteArray): String {
+        return JSONObject().apply {
+            put("model", model.trim())
+            put("max_tokens", 8192)
+            put("system", PromptTemplates.MISTAKE_SYSTEM)
+            put(
+                "messages",
+                JSONArray().put(
+                    JSONObject().apply {
+                        put("role", "user")
+                        put(
+                            "content",
+                            JSONArray().apply {
+                                put(
+                                    JSONObject().apply {
+                                        put("type", "image")
+                                        put(
+                                            "source",
+                                            JSONObject().apply {
+                                                put("type", "base64")
+                                                put("media_type", "image/jpeg")
+                                                put(
+                                                    "data",
+                                                    Base64.encodeToString(imageJpeg, Base64.NO_WRAP),
+                                                )
+                                            },
+                                        )
+                                    },
+                                )
+                                put(
+                                    JSONObject().apply {
+                                        put("type", "text")
+                                        put("text", PromptTemplates.MISTAKE_USER)
+                                    },
+                                )
+                            },
+                        )
+                    },
+                ),
+            )
+        }.toString()
+    }
+
+    private fun extractContentText(body: String?, isAnthropic: Boolean): String {
+        if (body.isNullOrBlank()) return ""
+        return runCatching {
+            val root = JSONObject(body)
+            if (isAnthropic) {
+                root.optJSONArray("content")
+                    ?.let { arr ->
+                        buildString {
+                            for (i in 0 until arr.length()) {
+                                val part = arr.optJSONObject(i) ?: continue
+                                if (part.optString("type") == "text") {
+                                    append(part.optString("text"))
+                                }
+                            }
+                        }
+                    }
+                    .orEmpty()
+            } else {
+                val content = root.optJSONArray("choices")
+                    ?.optJSONObject(0)
+                    ?.optJSONObject("message")
+                    ?.opt("content")
+
+                when (content) {
+                    is String -> content
+                    is JSONArray -> buildString {
+                        for (i in 0 until content.length()) {
+                            content.optJSONObject(i)?.optString("text")?.let(::append)
+                        }
+                    }
+                    else -> ""
+                }
+            }
+        }.getOrDefault("")
+    }
+
+    private fun extractReasoningText(body: String?): String {
+        if (body.isNullOrBlank()) return ""
+        return runCatching {
+            JSONObject(body)
+                .optJSONArray("choices")
+                ?.optJSONObject(0)
+                ?.optJSONObject("message")
+                ?.optString("reasoning_content")
+                .orEmpty()
+        }.getOrDefault("")
+    }
+
+    private fun extractFinishReason(body: String?): String? {
+        if (body.isNullOrBlank()) return null
+        return runCatching {
+            JSONObject(body)
+                .optJSONArray("choices")
+                ?.optJSONObject(0)
+                ?.optString("finish_reason")
+        }.getOrNull()
+    }
+
+    private fun extractJsonObject(text: String): JSONObject? {
+        if (text.isBlank()) return null
+        val cleaned = text
+            .replace("```json", "")
+            .replace("```", "")
+            .trim()
+        val start = cleaned.indexOf('{')
+        val end = cleaned.lastIndexOf('}')
+        if (start < 0 || end <= start) return null
+
+        return runCatching {
+            JSONObject(cleaned.substring(start, end + 1))
+        }.getOrNull()
+    }
+
+    private fun parseRecognized(obj: JSONObject): RecognizedMistake {
+        val isCorrect = when (val value = obj.opt("is_correct")) {
+            is Boolean -> value
+            is String -> value.equals("true", ignoreCase = true)
+            else -> false
+        }
+
+        return RecognizedMistake(
+            question = obj.optString("question").ifBlank { "（未识别到题目）" },
+            myAnswer = obj.optString("my_answer"),
+            correctAnswer = obj.optString("correct_answer"),
+            isCorrect = isCorrect,
+            errorType = obj.optString("error_type").ifBlank {
+                if (isCorrect) "无错" else "未分类"
+            },
+            knowledgePoint = obj.optString("knowledge_point"),
+            explanation = obj.optString("explanation"),
+        )
+    }
 
     /**
      * Claude 用 x-api-key + anthropic-version，其余走 Bearer。
@@ -165,6 +454,8 @@ class AiClient(
     }
 
     companion object {
+        private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
         private fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)

@@ -32,17 +32,30 @@ class NoteRepository(
         val collected = mutableListOf<Note>()
         var failed = 0
 
-        fun visit(dir: DocumentFile) {
+        fun visit(dir: DocumentFile, relativeDir: String) {
             for (file in dir.listFiles()) {
                 val name = file.name.orEmpty()
 
                 if (file.isDirectory) {
                     // 跳过 .obsidian 等隐藏目录
-                    if (!name.startsWith(".")) visit(file)
+                    if (!name.startsWith(".")) {
+                        val childRelative = if (relativeDir.isBlank()) {
+                            name
+                        } else {
+                            "$relativeDir/$name"
+                        }
+                        visit(file, childRelative)
+                    }
                     continue
                 }
 
                 if (!name.endsWith(".md", ignoreCase = true)) continue
+
+                val relativePath = if (relativeDir.isBlank()) {
+                    name
+                } else {
+                    "$relativeDir/$name"
+                }
 
                 try {
                     val content = context.contentResolver
@@ -56,6 +69,7 @@ class NoteRepository(
                         title = extractTitle(name, content),
                         content = content,
                         updatedAt = file.lastModified(),
+                        relativePath = relativePath,
                     )
                 } catch (e: Exception) {
                     failed++
@@ -63,8 +77,15 @@ class NoteRepository(
             }
         }
 
-        visit(root)
+        visit(root, "")
         noteDao.insertAll(collected)
+
+        // 清理已经从文件夹里删除的笔记（扫描到 0 篇时不动，避免权限异常导致清空）
+        val paths = collected.map { it.path }
+        if (paths.isNotEmpty()) {
+            noteDao.deleteNotIn(paths)
+        }
+
         ImportResult(imported = collected.size, failed = failed)
     }
 

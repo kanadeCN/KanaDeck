@@ -1,6 +1,8 @@
 package com.kanadecn.note.ui.search
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -13,21 +15,25 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kanadecn.note.data.local.Note
 import com.kanadecn.note.data.notes.NoteRepository
+import com.kanadecn.note.data.notes.ObsidianLauncher
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(
     noteRepository: NoteRepository,
+    obsidianLauncher: ObsidianLauncher,
     onBack: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
 
+    val context = LocalContext.current
     var query by rememberSaveable { mutableStateOf("") }
     var results by remember { mutableStateOf<List<Note>>(emptyList()) }
     var hasSearched by remember { mutableStateOf(false) }
@@ -96,7 +102,7 @@ fun SearchScreen(
 
             when {
                 !hasSearched -> Text(
-                    text = "输入关键词后按搜索",
+                    text = "输入关键词后按搜索，点击结果用 Obsidian 打开",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp),
@@ -115,7 +121,18 @@ fun SearchScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(results, key = { it.id }) { note ->
-                        NoteResultCard(note)
+                        NoteResultCard(
+                            note = note,
+                            onClick = {
+                                if (!obsidianLauncher.open(note)) {
+                                    Toast.makeText(
+                                        context,
+                                        "无法打开 Obsidian：请确认已安装，且笔记文件夹名与仓库名一致",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                }
+                            },
+                        )
                     }
                 }
             }
@@ -124,8 +141,15 @@ fun SearchScreen(
 }
 
 @Composable
-private fun NoteResultCard(note: Note) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+private fun NoteResultCard(
+    note: Note,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+    ) {
         Column(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -140,6 +164,11 @@ private fun NoteResultCard(note: Note) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "点击用 Obsidian 打开",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
             )
         }
     }
