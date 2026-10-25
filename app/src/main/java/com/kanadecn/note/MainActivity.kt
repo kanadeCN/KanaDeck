@@ -7,12 +7,22 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
 import com.kanadecn.note.data.local.AppDatabase
 import com.kanadecn.note.data.notes.NoteFolderImporter
 import com.kanadecn.note.data.notes.NoteFolderStore
@@ -21,16 +31,14 @@ import com.kanadecn.note.data.remote.AiClient
 import com.kanadecn.note.data.settings.SecureSettingsStore
 import com.kanadecn.note.data.settings.ThemeMode
 import com.kanadecn.note.data.settings.ThemePreferences
+import com.kanadecn.note.ui.components.DockBar
+import com.kanadecn.note.ui.components.DockTab
 import com.kanadecn.note.ui.home.HomeScreen
+import com.kanadecn.note.ui.mistake.MistakeScreen
+import com.kanadecn.note.ui.navigation.AppRoute
 import com.kanadecn.note.ui.search.SearchScreen
 import com.kanadecn.note.ui.settings.SettingsScreen
 import com.kanadecn.note.ui.theme.KanaDeckTheme
-
-private enum class AppScreen {
-    HOME,
-    SEARCH,
-    SETTINGS,
-}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,11 +58,9 @@ class MainActivity : ComponentActivity() {
         )
 
         setContent {
-            // 用字符串保存，避免 enum 的 Saveable 兼容问题
-            var screenName by rememberSaveable { mutableStateOf(AppScreen.HOME.name) }
-            val screen = AppScreen.valueOf(screenName)
-
             var themeMode by remember { mutableStateOf(themePreferences.load()) }
+            var selectedTabName by rememberSaveable { mutableStateOf(DockTab.NOTES.name) }
+            val selectedTab = DockTab.valueOf(selectedTabName)
 
             val systemDark = isSystemInDarkTheme()
             val darkTheme = when (themeMode) {
@@ -64,59 +70,129 @@ class MainActivity : ComponentActivity() {
             }
 
             KanaDeckTheme(darkTheme = darkTheme) {
-                // 给动画垫一层主题背景，避免滑动时露出窗口白底
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    AnimatedContent(
-                        targetState = screen,
-                        transitionSpec = {
-                            val forward = targetState.ordinal > initialState.ordinal
-                            val duration = 300
-                            if (forward) {
-                                (slideInHorizontally(tween(duration)) { width -> width } +
-                                    fadeIn(tween(duration))) togetherWith
-                                    (slideOutHorizontally(tween(duration)) { width -> -width / 4 } +
-                                        fadeOut(tween(duration)))
-                            } else {
-                                (slideInHorizontally(tween(duration)) { width -> -width / 4 } +
-                                    fadeIn(tween(duration))) togetherWith
-                                    (slideOutHorizontally(tween(duration)) { width -> width } +
-                                        fadeOut(tween(duration)))
-                            }
-                        },
-                        label = "screenTransition",
-                    ) { target ->
-                        when (target) {
-                            AppScreen.HOME -> HomeScreen(
-                                noteRepository = noteRepository,
-                                noteFolderImporter = noteFolderImporter,
-                                onOpenSearch = { screenName = AppScreen.SEARCH.name },
-                                onOpenSettings = { screenName = AppScreen.SETTINGS.name },
-                            )
+                    val navController = rememberNavController()
+                    val backStackEntry by navController.currentBackStackEntryAsState()
+                    val currentRoute = backStackEntry?.destination?.route
+                    val showDock = currentRoute == null || currentRoute in AppRoute.topLevel
 
-                            AppScreen.SEARCH -> SearchScreen(
-                                noteRepository = noteRepository,
-                                onBack = { screenName = AppScreen.HOME.name },
-                            )
-
-                            AppScreen.SETTINGS -> SettingsScreen(
-                                settingsStore = secureSettingsStore,
-                                aiClient = aiClient,
-                                noteRepository = noteRepository,
-                                noteFolderImporter = noteFolderImporter,
-                                selectedThemeMode = themeMode,
-                                onThemeModeChange = { newMode ->
-                                    themeMode = newMode
-                                    themePreferences.save(newMode)
+                    Scaffold(
+                        // 系统栏由各页面的 TopAppBar / dock 自己处理
+                        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+                        bottomBar = {
+                            DockBar(
+                                visible = showDock,
+                                selected = selectedTab,
+                                onSelect = { tab ->
+                                    selectedTabName = tab.name
+                                    navController.navigateToTab(tab.route)
                                 },
-                                onBack = { screenName = AppScreen.HOME.name },
                             )
+                        },
+                    ) { innerPadding ->
+                        NavHost(
+                            navController = navController,
+                            startDestination = AppRoute.NOTES,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(innerPadding),
+                            enterTransition = {
+                                if (isTabSwitch()) {
+                                    fadeIn(tween(200))
+                                } else {
+                                    slideInHorizontally(tween(300)) { width -> width } +
+                                        fadeIn(tween(300))
+                                }
+                            },
+                            exitTransition = {
+                                if (isTabSwitch()) {
+                                    fadeOut(tween(200))
+                                } else {
+                                    slideOutHorizontally(tween(300)) { width -> -width / 4 } +
+                                        fadeOut(tween(300))
+                                }
+                            },
+                            popEnterTransition = {
+                                if (isTabSwitch()) {
+                                    fadeIn(tween(200))
+                                } else {
+                                    slideInHorizontally(tween(300)) { width -> -width / 4 } +
+                                        fadeIn(tween(300))
+                                }
+                            },
+                            popExitTransition = {
+                                if (isTabSwitch()) {
+                                    fadeOut(tween(200))
+                                } else {
+                                    slideOutHorizontally(tween(300)) { width -> width } +
+                                        fadeOut(tween(300))
+                                }
+                            },
+                        ) {
+                            composable(AppRoute.NOTES) {
+                                HomeScreen(
+                                    noteRepository = noteRepository,
+                                    noteFolderImporter = noteFolderImporter,
+                                    onOpenSearch = { navController.navigate(AppRoute.SEARCH) },
+                                    onOpenSettings = { navController.navigate(AppRoute.SETTINGS) },
+                                )
+                            }
+
+                            composable(AppRoute.MISTAKES) {
+                                MistakeScreen(
+                                    onOpenSettings = { navController.navigate(AppRoute.SETTINGS) },
+                                )
+                            }
+
+                            composable(AppRoute.SEARCH) {
+                                SearchScreen(
+                                    noteRepository = noteRepository,
+                                    onBack = { navController.popBackStack() },
+                                )
+                            }
+
+                            composable(AppRoute.SETTINGS) {
+                                SettingsScreen(
+                                    settingsStore = secureSettingsStore,
+                                    aiClient = aiClient,
+                                    noteRepository = noteRepository,
+                                    noteFolderImporter = noteFolderImporter,
+                                    selectedThemeMode = themeMode,
+                                    onThemeModeChange = { newMode ->
+                                        themeMode = newMode
+                                        themePreferences.save(newMode)
+                                    },
+                                    onBack = { navController.popBackStack() },
+                                )
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+/**
+ * 底部 tab 的标准导航方式：保留起始页，切换时保存/恢复各 tab 状态。
+ */
+private fun NavHostController.navigateToTab(route: String) {
+    navigate(route) {
+        popUpTo(graph.findStartDestination().id) { saveState = true }
+        launchSingleTop = true
+        restoreState = true
+    }
+}
+
+/**
+ * 笔记 ↔ 错题 之间用淡入淡出，进入子页面才用滑动。
+ */
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.isTabSwitch(): Boolean {
+    val from = initialState.destination.route
+    val to = targetState.destination.route
+    return from != null && to != null &&
+        from in AppRoute.topLevel && to in AppRoute.topLevel
 }

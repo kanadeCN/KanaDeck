@@ -108,6 +108,7 @@ fun SettingsScreen(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             TopAppBar(
                 title = { Text("设置") },
@@ -130,6 +131,51 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            // ===== 笔记库 =====
+            Text(
+                text = "笔记库",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = folderName?.let { "当前文件夹：$it" } ?: "还没有选择文件夹",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "已导入 ${noteCount ?: 0} 篇笔记",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(
+                onClick = { noteFolderPicker.launch(null) },
+                enabled = !isImportingNotes,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (isImportingNotes) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(
+                    when {
+                        isImportingNotes -> "导入中…"
+                        folderName == null -> "选择笔记文件夹"
+                        else -> "切换文件夹"
+                    },
+                )
+            }
+            importStatus?.let { status ->
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            HorizontalDivider()
+
             Text(
                 text = "AI 配置",
                 style = MaterialTheme.typography.titleMedium,
@@ -372,51 +418,6 @@ fun SettingsScreen(
                         )
                     }
                 }
-            }
-
-            HorizontalDivider()
-
-            // ===== 笔记库 =====
-            Text(
-                text = "笔记库",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = folderName?.let { "当前文件夹：$it" } ?: "还没有选择文件夹",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = "已导入 ${noteCount ?: 0} 篇笔记",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Button(
-                onClick = { noteFolderPicker.launch(null) },
-                enabled = !isImportingNotes,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                if (isImportingNotes) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                }
-                Text(
-                    when {
-                        isImportingNotes -> "导入中…"
-                        folderName == null -> "选择笔记文件夹"
-                        else -> "切换文件夹"
-                    },
-                )
-            }
-            importStatus?.let { status ->
-                Text(
-                    text = status,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
 
             HorizontalDivider()
