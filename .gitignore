@@ -33,3 +33,14 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# Secrets
+secrets.properties
+keystore.properties
+.env
+*.p12
+.DS_Store
+
+# Build outputs
+app/debug/
+app/release/

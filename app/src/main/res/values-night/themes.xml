@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- 深色模式窗口主题：避免启动/动画时露出白色窗口背景 -->
+    <style name="Theme.KanaDeck" parent="android:Theme.Material.NoActionBar" />
+</resources>
