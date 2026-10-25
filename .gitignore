@@ -16,6 +16,7 @@ local.properties
 
 # secrets（绝不提交）
 secrets.properties
+keystore.properties
 .env
 *.jks
 *.keystore

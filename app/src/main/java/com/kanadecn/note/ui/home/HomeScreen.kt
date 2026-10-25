@@ -123,38 +123,42 @@ fun HomeScreen(
                     noteCount == 0 && isRefreshing -> CircularProgressIndicator()
 
                     noteCount == 0 -> {
-                        Text(
-                            text = "还没有导入笔记",
-                            style = MaterialTheme.typography.headlineSmall,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "选择你的 Obsidian 笔记文件夹开始",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                        )
-                        Spacer(Modifier.height(24.dp))
-                        Button(
-                            onClick = { folderPicker.launch(null) },
-                            enabled = !isImporting,
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            if (isImporting) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    strokeWidth = 2.dp,
-                                )
-                                Spacer(Modifier.width(8.dp))
-                            }
-                            Text(if (isImporting) "导入中…" else "选择笔记文件夹")
-                        }
-                        importStatus?.let { status ->
-                            Spacer(Modifier.height(12.dp))
                             Text(
-                                text = status,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                text = "还没有导入笔记",
+                                style = MaterialTheme.typography.headlineSmall,
                             )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "选择你的 Obsidian 笔记文件夹开始",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                            )
+                            Spacer(Modifier.height(24.dp))
+                            Button(
+                                onClick = { folderPicker.launch(null) },
+                                enabled = !isImporting,
+                            ) {
+                                if (isImporting) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                Text(if (isImporting) "导入中…" else "选择笔记文件夹")
+                            }
+                            importStatus?.let { status ->
+                                Spacer(Modifier.height(12.dp))
+                                Text(
+                                    text = status,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
 

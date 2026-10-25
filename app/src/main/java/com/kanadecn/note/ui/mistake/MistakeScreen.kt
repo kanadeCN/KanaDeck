@@ -3,71 +3,56 @@ package com.kanadecn.note.ui.mistake
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.kanadecn.note.data.local.Mistake
+import com.kanadecn.note.data.mistakes.CategoryStore
+import com.kanadecn.note.data.mistakes.MistakeRecognizer
 import com.kanadecn.note.data.mistakes.MistakeRepository
-import com.kanadecn.note.data.remote.AiClient
-import com.kanadecn.note.data.remote.MistakeRecognitionResult
+import com.kanadecn.note.data.mistakes.RecognizeOutcome
 import com.kanadecn.note.data.remote.RecognizedMistake
-import com.kanadecn.note.data.settings.SecureSettingsStore
 import com.kanadecn.note.ui.components.DockDefaults
 import com.kanadecn.note.ui.components.KanaDeckTitle
 import com.kanadecn.note.ui.components.failureMessage
-import com.kanadecn.note.ui.theme.appColors
-import com.kanadecn.note.util.ImageUtils
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MistakeScreen(
     mistakeRepository: MistakeRepository,
-    aiClient: AiClient,
-    settingsStore: SecureSettingsStore,
-    onOpenDetail: (Mistake) -> Unit,
+    categoryStore: CategoryStore,
+    mistakeRecognizer: MistakeRecognizer,
+    onOpenCategory: (String) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var mistakes by remember { mutableStateOf<List<Mistake>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
+    var categories by remember { mutableStateOf(categoryStore.allCategories()) }
+    var categoryCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    var renameTarget by remember { mutableStateOf<String?>(null) }
+    var deleteTarget by remember { mutableStateOf<String?>(null) }
+    var renameText by remember { mutableStateOf("") }
     var isRecognizing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var errorDetail by remember { mutableStateOf<String?>(null) }
     var draft by remember { mutableStateOf<RecognizedMistake?>(null) }
     var draftImagePath by remember { mutableStateOf<String?>(null) }
-    var pendingDelete by remember { mutableStateOf<Mistake?>(null) }
 
     LaunchedEffect(Unit) {
-        mistakes = runCatching { mistakeRepository.getAll() }.getOrDefault(emptyList())
-        isLoading = false
+        categories = categoryStore.allCategories()
+        categoryCounts = runCatching { mistakeRepository.countByCategory() }
+            .getOrDefault(emptyMap())
     }
 
     val imagePicker = rememberLauncherForActivityResult(
@@ -75,37 +60,25 @@ fun MistakeScreen(
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
 
-        val settings = settingsStore.load()
-        if (!settings.isConfigured) {
-            errorMessage = "请先在设置里完成 AI 配置"
-            errorDetail = "需要 Base URL、API Key 和模型"
-            return@rememberLauncherForActivityResult
-        }
-
         scope.launch {
             isRecognizing = true
             errorMessage = null
             errorDetail = null
             try {
-                val prepared = withContext(Dispatchers.IO) {
-                    ImageUtils.prepare(context, uri)
-                }
-                if (prepared == null) {
-                    errorMessage = "图片读取失败"
-                    return@launch
-                }
-
-                when (val result = aiClient.recognizeMistake(settings, prepared.apiJpeg)) {
-                    is MistakeRecognitionResult.Success -> {
-                        draftImagePath = withContext(Dispatchers.IO) {
-                            ImageUtils.saveMistakeImage(context, prepared.storedWebp)
-                        }
-                        draft = result.data
+                when (val outcome = mistakeRecognizer.recognize(uri)) {
+                    is RecognizeOutcome.Success -> {
+                        draft = outcome.draft
+                        draftImagePath = outcome.imagePath
                     }
 
-                    is MistakeRecognitionResult.Failure -> {
-                        errorMessage = failureMessage(result.reason)
-                        errorDetail = result.detail
+                    is RecognizeOutcome.Failure -> {
+                        errorMessage = failureMessage(outcome.reason)
+                        errorDetail = outcome.detail
+                    }
+
+                    RecognizeOutcome.NotConfigured -> {
+                        errorMessage = "请先在设置里完成 AI 配置"
+                        errorDetail = "需要 Base URL、API Key 和模型"
                     }
                 }
             } catch (e: Exception) {
@@ -139,6 +112,12 @@ fun MistakeScreen(
             MistakeEditor(
                 initial = currentDraft,
                 imagePath = currentImagePath,
+                categories = categories,
+                onAddCategory = { name ->
+                    val updated = categoryStore.add(name)
+                    categories = updated
+                    updated
+                },
                 onCancel = {
                     draft = null
                     draftImagePath = null
@@ -156,49 +135,130 @@ fun MistakeScreen(
                                 knowledgePoint = edited.knowledgePoint,
                                 explanation = edited.explanation,
                                 createdAt = System.currentTimeMillis(),
+                                category = edited.category,
                             ),
                         )
-                        mistakes = mistakeRepository.getAll()
+                        categoryCounts = mistakeRepository.countByCategory()
                         draft = null
                         draftImagePath = null
                     }
                 },
                 modifier = Modifier.padding(innerPadding),
+                bottomContentPadding = DockDefaults.ContentBottomPadding,
             )
         } else {
-            MistakeList(
-                mistakes = mistakes,
-                isLoading = isLoading,
-                isRecognizing = isRecognizing,
-                errorMessage = errorMessage,
-                errorDetail = errorDetail,
-                onPickImage = {
-                    imagePicker.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    top = 16.dp,
+                    end = 16.dp,
+                    bottom = DockDefaults.ContentBottomPadding,
+                ),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item {
+                    AddMistakeCard(
+                        isRecognizing = isRecognizing,
+                        errorMessage = errorMessage,
+                        errorDetail = errorDetail,
+                        onPickImage = {
+                            imagePicker.launch(
+                                PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                ),
+                            )
+                        },
                     )
-                },
-                onRequestDelete = { pendingDelete = it },
-                onOpenDetail = onOpenDetail,
-                modifier = Modifier.padding(innerPadding),
-            )
+                }
+
+                item {
+                    Text(
+                        text = "错题集",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+
+                items(categories) { category ->
+                    val count = categoryCounts[category] ?: 0
+                    if (category != CategoryStore.UNCATEGORIZED || count > 0) {
+                        CategoryCard(
+                            category = category,
+                            count = count,
+                            onClick = { onOpenCategory(category) },
+                            onRename = {
+                                renameTarget = category
+                                renameText = category
+                            },
+                            onDelete = { deleteTarget = category },
+                        )
+                    }
+                }
+            }
         }
     }
 
-    pendingDelete?.let { mistake ->
+    renameTarget?.let { oldName ->
         AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text("删除错题") },
-            text = { Text("确定删除这道错题吗？") },
+            onDismissRequest = { renameTarget = null },
+            title = { Text("重命名分类") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    label = { Text("分类名称") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val newName = renameText.trim()
+                        if (newName.isNotBlank() && newName != oldName) {
+                            scope.launch {
+                                mistakeRepository.updateCategory(oldName, newName)
+                                categories = categoryStore.rename(oldName, newName)
+                                categoryCounts = mistakeRepository.countByCategory()
+                                renameTarget = null
+                            }
+                        } else {
+                            renameTarget = null
+                        }
+                    },
+                    enabled = renameText.isNotBlank(),
+                ) {
+                    Text("保存")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameTarget = null }) {
+                    Text("取消")
+                }
+            },
+        )
+    }
+
+    deleteTarget?.let { category ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("删除分类") },
+            text = {
+                Text("「$category」下的错题会移动到「未分类」，确定删除吗？")
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
                         scope.launch {
-                            withContext(Dispatchers.IO) {
-                                runCatching { File(mistake.imagePath).delete() }
-                            }
-                            mistakeRepository.delete(mistake)
-                            mistakes = mistakeRepository.getAll()
-                            pendingDelete = null
+                            mistakeRepository.updateCategory(
+                                oldCategory = category,
+                                newCategory = CategoryStore.UNCATEGORIZED,
+                            )
+                            categories = categoryStore.delete(category)
+                            categoryCounts = mistakeRepository.countByCategory()
+                            deleteTarget = null
                         }
                     },
                 ) {
@@ -206,7 +266,7 @@ fun MistakeScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) {
+                TextButton(onClick = { deleteTarget = null }) {
                     Text("取消")
                 }
             },
@@ -214,340 +274,130 @@ fun MistakeScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MistakeList(
-    mistakes: List<Mistake>,
-    isLoading: Boolean,
+private fun AddMistakeCard(
     isRecognizing: Boolean,
     errorMessage: String?,
     errorDetail: String?,
     onPickImage: () -> Unit,
-    onRequestDelete: (Mistake) -> Unit,
-    onOpenDetail: (Mistake) -> Unit,
-    modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(bottom = DockDefaults.ContentBottomPadding),
-    ) {
-        Card(
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = "识别错题",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = "选择错题图片，AI 会识别题目、判错、总结并推荐分类。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(
+                onClick = onPickImage,
+                enabled = !isRecognizing,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (isRecognizing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(if (isRecognizing) "识别中…" else "选择错题图片")
+            }
+            errorMessage?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            errorDetail?.let { detail ->
+                Text(
+                    text = detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryCard(
+    category: String,
+    count: Int,
+    onClick: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    val canEdit = category != CategoryStore.UNCATEGORIZED
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(onClick = onClick)
+                    .padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
-                    text = "识别错题",
+                    text = category,
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
-                    text = "选择错题图片，AI 会识别题目、判错并总结。需要支持视觉的模型。",
+                    text = "$count 道错题",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
 
-                Button(
-                    onClick = onPickImage,
-                    enabled = !isRecognizing,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    if (isRecognizing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
+            if (canEdit) {
+                Box {
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.MoreVert,
+                            contentDescription = "更多",
                         )
-                        Spacer(Modifier.width(8.dp))
                     }
-                    Text(if (isRecognizing) "识别中…" else "选择错题图片")
-                }
-
-                errorMessage?.let { message ->
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                errorDetail?.let { detail ->
-                    Text(
-                        text = detail,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-
-        when {
-            isLoading && mistakes.isEmpty() -> Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator()
-            }
-
-            mistakes.isEmpty() -> Column(
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Warning,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(40.dp),
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "还没有错题",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "左滑错题卡片可删除",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            else -> LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(mistakes, key = { it.id }) { mistake ->
-                    @Suppress("DEPRECATION")
-                    val dismissState = rememberSwipeToDismissBoxState(
-                        confirmValueChange = { value ->
-                            if (value == SwipeToDismissBoxValue.EndToStart) {
-                                onRequestDelete(mistake)
-                            }
-                            false
-                        },
-                    )
-
-                    SwipeToDismissBox(
-                        state = dismissState,
-                        enableDismissFromStartToEnd = false,
-                        backgroundContent = {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .clip(MaterialTheme.shapes.medium)
-                                    .background(MaterialTheme.colorScheme.errorContainer)
-                                    .padding(horizontal = 20.dp),
-                                contentAlignment = Alignment.CenterEnd,
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Delete,
-                                    contentDescription = "删除",
-                                    tint = MaterialTheme.colorScheme.onErrorContainer,
-                                )
-                            }
-                        },
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
                     ) {
-                        MistakeCard(
-                            mistake = mistake,
-                            onClick = { onOpenDetail(mistake) },
+                        DropdownMenuItem(
+                            text = { Text("重命名") },
+                            onClick = {
+                                menuExpanded = false
+                                onRename()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("删除") },
+                            onClick = {
+                                menuExpanded = false
+                                onDelete()
+                            },
                         )
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun MistakeCard(
-    mistake: Mistake,
-    onClick: () -> Unit,
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-    ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            AsyncImage(
-                model = File(mistake.imagePath),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(56.dp)
-                    .clip(MaterialTheme.shapes.small),
-            )
-
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = mistake.question,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = if (mistake.isCorrect) "判定：正确" else "错因：${mistake.errorType}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (mistake.isCorrect) {
-                        MaterialTheme.appColors.success
-                    } else {
-                        MaterialTheme.colorScheme.error
-                    },
-                )
-                if (mistake.knowledgePoint.isNotBlank()) {
-                    Text(
-                        text = "知识点：${mistake.knowledgePoint}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Text(
-                    text = formatTime(mistake.createdAt),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            } else {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
     }
 }
-
-@Composable
-private fun MistakeEditor(
-    initial: RecognizedMistake,
-    imagePath: String,
-    onCancel: () -> Unit,
-    onSave: (RecognizedMistake, String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var question by rememberSaveable(initial) { mutableStateOf(initial.question) }
-    var myAnswer by rememberSaveable(initial) { mutableStateOf(initial.myAnswer) }
-    var correctAnswer by rememberSaveable(initial) { mutableStateOf(initial.correctAnswer) }
-    var isCorrect by rememberSaveable(initial) { mutableStateOf(initial.isCorrect) }
-    var errorType by rememberSaveable(initial) { mutableStateOf(initial.errorType) }
-    var knowledgePoint by rememberSaveable(initial) { mutableStateOf(initial.knowledgePoint) }
-    var explanation by rememberSaveable(initial) { mutableStateOf(initial.explanation) }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp)
-            .padding(bottom = DockDefaults.ContentBottomPadding),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(
-            text = "确认识别结果",
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Text(
-            text = "AI 可能识别有误，请检查后保存。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        AsyncImage(
-            model = File(imagePath),
-            contentDescription = null,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(220.dp)
-                .clip(MaterialTheme.shapes.medium),
-        )
-
-        OutlinedTextField(
-            value = question,
-            onValueChange = { question = it },
-            label = { Text("题目") },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = myAnswer,
-            onValueChange = { myAnswer = it },
-            label = { Text("我的答案") },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = correctAnswer,
-            onValueChange = { correctAnswer = it },
-            label = { Text("正确答案 / 正确解法") },
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "这道题做对了",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Spacer(Modifier.weight(1f))
-            Switch(
-                checked = isCorrect,
-                onCheckedChange = { isCorrect = it },
-            )
-        }
-
-        OutlinedTextField(
-            value = errorType,
-            onValueChange = { errorType = it },
-            label = { Text("错因") },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = knowledgePoint,
-            onValueChange = { knowledgePoint = it },
-            label = { Text("知识点") },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = explanation,
-            onValueChange = { explanation = it },
-            label = { Text("讲解") },
-            minLines = 4,
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedButton(
-                onClick = onCancel,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text("取消")
-            }
-            Button(
-                onClick = {
-                    onSave(
-                        RecognizedMistake(
-                            question = question.ifBlank { "（未填写题目）" },
-                            myAnswer = myAnswer,
-                            correctAnswer = correctAnswer,
-                            isCorrect = isCorrect,
-                            errorType = errorType,
-                            knowledgePoint = knowledgePoint,
-                            explanation = explanation,
-                        ),
-                        imagePath,
-                    )
-                },
-                modifier = Modifier.weight(1f),
-            ) {
-                Text("保存")
-            }
-        }
-    }
-}
-
-private fun formatTime(millis: Long): String =
-    SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(millis))

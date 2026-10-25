@@ -1,5 +1,6 @@
 package com.kanadecn.note
 
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -25,6 +26,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.kanadecn.note.data.local.AppDatabase
+import com.kanadecn.note.data.mistakes.CategoryStore
+import com.kanadecn.note.data.mistakes.MistakeRecognizer
 import com.kanadecn.note.data.mistakes.MistakeRepository
 import com.kanadecn.note.data.notes.NoteFolderImporter
 import com.kanadecn.note.data.notes.NoteFolderStore
@@ -37,6 +40,7 @@ import com.kanadecn.note.data.settings.ThemePreferences
 import com.kanadecn.note.ui.components.DockOverlay
 import com.kanadecn.note.ui.components.DockTab
 import com.kanadecn.note.ui.home.HomeScreen
+import com.kanadecn.note.ui.mistake.MistakeCategoryScreen
 import com.kanadecn.note.ui.mistake.MistakeDetailScreen
 import com.kanadecn.note.ui.mistake.MistakeScreen
 import com.kanadecn.note.ui.navigation.AppRoute
@@ -55,6 +59,13 @@ class MainActivity : ComponentActivity() {
         val database = AppDatabase.get(applicationContext)
         val noteRepository = NoteRepository(applicationContext, database.noteDao())
         val mistakeRepository = MistakeRepository(database.mistakeDao())
+        val categoryStore = CategoryStore(applicationContext)
+        val mistakeRecognizer = MistakeRecognizer(
+            context = applicationContext,
+            aiClient = aiClient,
+            settingsStore = secureSettingsStore,
+            categoryStore = categoryStore,
+        )
         val noteFolderStore = NoteFolderStore(applicationContext)
         val noteFolderImporter = NoteFolderImporter(
             context = applicationContext,
@@ -146,12 +157,39 @@ class MainActivity : ComponentActivity() {
                                 composable(AppRoute.MISTAKES) {
                                     MistakeScreen(
                                         mistakeRepository = mistakeRepository,
-                                        aiClient = aiClient,
-                                        settingsStore = secureSettingsStore,
-                                        onOpenDetail = { mistake ->
-                                            navController.navigate(AppRoute.mistakeDetail(mistake.id))
+                                        categoryStore = categoryStore,
+                                        mistakeRecognizer = mistakeRecognizer,
+                                        onOpenCategory = { category ->
+                                            navController.navigate(AppRoute.mistakeCategory(category))
                                         },
                                         onOpenSettings = { navController.navigate(AppRoute.SETTINGS) },
+                                    )
+                                }
+
+                                composable(
+                                    route = AppRoute.MISTAKE_CATEGORY,
+                                    arguments = listOf(
+                                        navArgument(AppRoute.MISTAKE_CATEGORY_ARG) {
+                                            type = NavType.StringType
+                                        },
+                                    ),
+                                ) { entry ->
+                                    val category = entry.arguments
+                                        ?.getString(AppRoute.MISTAKE_CATEGORY_ARG)
+                                        ?.let { Uri.decode(it) }
+                                        ?: return@composable
+
+                                    MistakeCategoryScreen(
+                                        category = category,
+                                        mistakeRepository = mistakeRepository,
+                                        categoryStore = categoryStore,
+                                        mistakeRecognizer = mistakeRecognizer,
+                                        onOpenDetail = { mistake ->
+                                            navController.navigate(
+                                                AppRoute.mistakeDetail(mistake.id),
+                                            )
+                                        },
+                                        onBack = { navController.popBackStack() },
                                     )
                                 }
 

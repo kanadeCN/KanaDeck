@@ -15,4 +15,5 @@ data class Mistake(
     val knowledgePoint: String,
     val explanation: String,
     val createdAt: Long,
+    val category: String = "未分类",
 )

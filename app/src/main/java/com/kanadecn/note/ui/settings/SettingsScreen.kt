@@ -442,6 +442,10 @@ fun SettingsScreen(
             HorizontalDivider()
 
             // ===== 外观下拉 =====
+            Text(
+                text = "偏好",
+                style = MaterialTheme.typography.titleMedium,
+            )
             ExposedDropdownMenuBox(
                 expanded = themeMenuExpanded,
                 onExpandedChange = { themeMenuExpanded = it },

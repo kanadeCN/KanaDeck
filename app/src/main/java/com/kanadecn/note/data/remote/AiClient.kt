@@ -31,6 +31,7 @@ data class RecognizedMistake(
     val errorType: String,
     val knowledgePoint: String,
     val explanation: String,
+    val category: String,
 )
 
 sealed interface MistakeRecognitionResult {
@@ -132,6 +133,7 @@ class AiClient(
     suspend fun recognizeMistake(
         settings: LlmSettings,
         imageJpeg: ByteArray,
+        categories: List<String>,
     ): MistakeRecognitionResult = withContext(Dispatchers.IO) {
         val baseUrl = settings.baseUrl.trim().trimEnd('/')
         if (baseUrl.isBlank() || !baseUrl.startsWith("https://", ignoreCase = true)) {
@@ -140,10 +142,11 @@ class AiClient(
 
         val isAnthropic = baseUrl.contains("anthropic.com", ignoreCase = true)
         val endpoint = if (isAnthropic) "$baseUrl/messages" else "$baseUrl/chat/completions"
+        val systemPrompt = PromptTemplates.mistakeSystem(categories)
         val payload = if (isAnthropic) {
-            anthropicPayload(settings.model, imageJpeg)
+            anthropicPayload(settings.model, imageJpeg, systemPrompt)
         } else {
-            openAiPayload(settings.model, imageJpeg)
+            openAiPayload(settings.model, imageJpeg, systemPrompt)
         }
 
         val request = try {
@@ -189,7 +192,7 @@ class AiClient(
                     }
                     MistakeRecognitionResult.Failure(FailureReason.UNKNOWN, detail)
                 } else {
-                    MistakeRecognitionResult.Success(parseRecognized(json))
+                    MistakeRecognitionResult.Success(parseRecognized(json, categories))
                 }
             }
         } catch (e: InterruptedIOException) {
@@ -205,7 +208,11 @@ class AiClient(
         }
     }
 
-    private fun openAiPayload(model: String, imageJpeg: ByteArray): String {
+    private fun openAiPayload(
+        model: String,
+        imageJpeg: ByteArray,
+        systemPrompt: String,
+    ): String {
         val dataUrl = "data:image/jpeg;base64," + Base64.encodeToString(imageJpeg, Base64.NO_WRAP)
         return JSONObject().apply {
             put("model", model.trim())
@@ -216,7 +223,7 @@ class AiClient(
                     put(
                         JSONObject().apply {
                             put("role", "system")
-                            put("content", PromptTemplates.MISTAKE_SYSTEM)
+                            put("content", systemPrompt)
                         },
                     )
                     put(
@@ -249,11 +256,15 @@ class AiClient(
         }.toString()
     }
 
-    private fun anthropicPayload(model: String, imageJpeg: ByteArray): String {
+    private fun anthropicPayload(
+        model: String,
+        imageJpeg: ByteArray,
+        systemPrompt: String,
+    ): String {
         return JSONObject().apply {
             put("model", model.trim())
             put("max_tokens", 8192)
-            put("system", PromptTemplates.MISTAKE_SYSTEM)
+            put("system", systemPrompt)
             put(
                 "messages",
                 JSONArray().put(
@@ -365,11 +376,21 @@ class AiClient(
         }.getOrNull()
     }
 
-    private fun parseRecognized(obj: JSONObject): RecognizedMistake {
+    private fun parseRecognized(
+        obj: JSONObject,
+        categories: List<String>,
+    ): RecognizedMistake {
         val isCorrect = when (val value = obj.opt("is_correct")) {
             is Boolean -> value
             is String -> value.equals("true", ignoreCase = true)
             else -> false
+        }
+
+        val recommendedCategory = obj.optString("category").trim()
+        val category = if (recommendedCategory in categories) {
+            recommendedCategory
+        } else {
+            com.kanadecn.note.data.mistakes.CategoryStore.UNCATEGORIZED
         }
 
         return RecognizedMistake(
@@ -382,6 +403,7 @@ class AiClient(
             },
             knowledgePoint = obj.optString("knowledge_point"),
             explanation = obj.optString("explanation"),
+            category = category,
         )
     }
 
