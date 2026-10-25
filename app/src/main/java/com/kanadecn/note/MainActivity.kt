@@ -13,13 +13,24 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import com.kanadecn.note.data.local.AppDatabase
+import com.kanadecn.note.data.notes.NoteFolderImporter
+import com.kanadecn.note.data.notes.NoteFolderStore
+import com.kanadecn.note.data.notes.NoteRepository
 import com.kanadecn.note.data.remote.AiClient
 import com.kanadecn.note.data.settings.SecureSettingsStore
 import com.kanadecn.note.data.settings.ThemeMode
 import com.kanadecn.note.data.settings.ThemePreferences
 import com.kanadecn.note.ui.home.HomeScreen
+import com.kanadecn.note.ui.search.SearchScreen
 import com.kanadecn.note.ui.settings.SettingsScreen
 import com.kanadecn.note.ui.theme.KanaDeckTheme
+
+private enum class AppScreen {
+    HOME,
+    SEARCH,
+    SETTINGS,
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -29,9 +40,20 @@ class MainActivity : ComponentActivity() {
         val secureSettingsStore = SecureSettingsStore(applicationContext)
         val themePreferences = ThemePreferences(applicationContext)
         val aiClient = AiClient()
+        val database = AppDatabase.get(applicationContext)
+        val noteRepository = NoteRepository(applicationContext, database.noteDao())
+        val noteFolderStore = NoteFolderStore(applicationContext)
+        val noteFolderImporter = NoteFolderImporter(
+            context = applicationContext,
+            noteRepository = noteRepository,
+            noteFolderStore = noteFolderStore,
+        )
 
         setContent {
-            var showSettings by rememberSaveable { mutableStateOf(false) }
+            // 用字符串保存，避免 enum 的 Saveable 兼容问题
+            var screenName by rememberSaveable { mutableStateOf(AppScreen.HOME.name) }
+            val screen = AppScreen.valueOf(screenName)
+
             var themeMode by remember { mutableStateOf(themePreferences.load()) }
 
             val systemDark = isSystemInDarkTheme()
@@ -48,17 +70,16 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background,
                 ) {
                     AnimatedContent(
-                        targetState = showSettings,
+                        targetState = screen,
                         transitionSpec = {
+                            val forward = targetState.ordinal > initialState.ordinal
                             val duration = 300
-                            if (targetState) {
-                                // 进入设置页：从右滑入，主页稍微左移
+                            if (forward) {
                                 (slideInHorizontally(tween(duration)) { width -> width } +
                                     fadeIn(tween(duration))) togetherWith
                                     (slideOutHorizontally(tween(duration)) { width -> -width / 4 } +
                                         fadeOut(tween(duration)))
                             } else {
-                                // 返回主页：从左侧滑回，设置页向右退出
                                 (slideInHorizontally(tween(duration)) { width -> -width / 4 } +
                                     fadeIn(tween(duration))) togetherWith
                                     (slideOutHorizontally(tween(duration)) { width -> width } +
@@ -66,21 +87,31 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         label = "screenTransition",
-                    ) { isSettings ->
-                        if (isSettings) {
-                            SettingsScreen(
+                    ) { target ->
+                        when (target) {
+                            AppScreen.HOME -> HomeScreen(
+                                noteRepository = noteRepository,
+                                noteFolderImporter = noteFolderImporter,
+                                onOpenSearch = { screenName = AppScreen.SEARCH.name },
+                                onOpenSettings = { screenName = AppScreen.SETTINGS.name },
+                            )
+
+                            AppScreen.SEARCH -> SearchScreen(
+                                noteRepository = noteRepository,
+                                onBack = { screenName = AppScreen.HOME.name },
+                            )
+
+                            AppScreen.SETTINGS -> SettingsScreen(
                                 settingsStore = secureSettingsStore,
                                 aiClient = aiClient,
+                                noteRepository = noteRepository,
+                                noteFolderImporter = noteFolderImporter,
                                 selectedThemeMode = themeMode,
                                 onThemeModeChange = { newMode ->
                                     themeMode = newMode
                                     themePreferences.save(newMode)
                                 },
-                                onBack = { showSettings = false },
-                            )
-                        } else {
-                            HomeScreen(
-                                onOpenSettings = { showSettings = true },
+                                onBack = { screenName = AppScreen.HOME.name },
                             )
                         }
                     }

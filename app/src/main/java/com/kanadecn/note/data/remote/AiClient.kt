@@ -1,26 +1,15 @@
 package com.kanadecn.note.data.remote
 
-import com.kanadecn.note.data.settings.LlmSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
 import java.io.IOException
-import java.net.SocketTimeoutException
+import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit
-
-sealed interface ConnectionResult {
-    data class Success(val latencyMs: Long) : ConnectionResult
-    data class Failure(
-        val reason: FailureReason,
-        val detail: String? = null,
-    ) : ConnectionResult
-}
 
 sealed interface ModelListResult {
     data class Success(val models: List<String>) : ModelListResult
@@ -44,7 +33,7 @@ enum class FailureReason {
 }
 
 /**
- * 只负责和 OpenAI 兼容接口通信。
+ * 只负责和 AI 服务通信。
  * 安全约定：不打印请求头/请求体，key 永远不会进日志。
  */
 class AiClient(
@@ -53,7 +42,7 @@ class AiClient(
 
     /**
      * 拉取可用模型：GET {baseUrl}/models。
-     * 同时验证 Base URL 和 Key 是否有效。
+     * 同时验证服务商地址和 Key 是否有效。
      */
     suspend fun listModels(baseUrlRaw: String, apiKey: String): ModelListResult =
         withContext(Dispatchers.IO) {
@@ -65,11 +54,14 @@ class AiClient(
             val request = try {
                 Request.Builder()
                     .url("$baseUrl/models")
-                    .header("Authorization", "Bearer ${apiKey.trim()}")
+                    .withAuth(baseUrl, apiKey)
                     .get()
                     .build()
             } catch (e: IllegalArgumentException) {
-                return@withContext ModelListResult.Failure(FailureReason.INVALID_URL)
+                return@withContext ModelListResult.Failure(
+                    FailureReason.INVALID_URL,
+                    e.message?.sanitizeForDisplay(apiKey),
+                )
             }
 
             try {
@@ -90,65 +82,29 @@ class AiClient(
                         ModelListResult.Success(models)
                     }
                 }
-            } catch (e: SocketTimeoutException) {
-                ModelListResult.Failure(FailureReason.TIMEOUT)
+            } catch (e: InterruptedIOException) {
+                // SocketTimeoutException 和 callTimeout 都走这里
+                ModelListResult.Failure(
+                    FailureReason.TIMEOUT,
+                    e.message?.sanitizeForDisplay(apiKey),
+                )
             } catch (e: IOException) {
-                ModelListResult.Failure(FailureReason.NETWORK)
+                ModelListResult.Failure(
+                    FailureReason.NETWORK,
+                    e.message?.sanitizeForDisplay(apiKey),
+                )
             }
         }
 
     /**
-     * 用一条最小的 chat 请求测试选中的模型是否可用。
+     * Claude 用 x-api-key + anthropic-version，其余走 Bearer。
      */
-    suspend fun testConnection(settings: LlmSettings): ConnectionResult =
-        withContext(Dispatchers.IO) {
-            val baseUrl = settings.baseUrl.trim().trimEnd('/')
-            if (baseUrl.isBlank() || !baseUrl.startsWith("https://", ignoreCase = true)) {
-                return@withContext ConnectionResult.Failure(insecureOrInvalid(baseUrl))
-            }
-
-            val payload = JSONObject().apply {
-                put("model", settings.model.trim())
-                put(
-                    "messages",
-                    JSONArray().put(
-                        JSONObject().apply {
-                            put("role", "user")
-                            put("content", "ping")
-                        },
-                    ),
-                )
-                put("max_tokens", 1)
-                put("stream", false)
-            }.toString()
-
-            val request = try {
-                Request.Builder()
-                    .url("$baseUrl/chat/completions")
-                    .header("Authorization", "Bearer ${settings.apiKey.trim()}")
-                    .post(payload.toRequestBody(JSON_MEDIA_TYPE))
-                    .build()
-            } catch (e: IllegalArgumentException) {
-                return@withContext ConnectionResult.Failure(FailureReason.INVALID_URL)
-            }
-
-            val start = System.currentTimeMillis()
-            try {
-                client.newCall(request).execute().use { response ->
-                    val latency = System.currentTimeMillis() - start
-                    if (response.isSuccessful) {
-                        return@use ConnectionResult.Success(latency)
-                    }
-
-                    val body = runCatching { response.body?.string() }.getOrNull()
-                    val (reason, detail) = mapFailure(response.code, body, settings.apiKey)
-                    ConnectionResult.Failure(reason, detail)
-                }
-            } catch (e: SocketTimeoutException) {
-                ConnectionResult.Failure(FailureReason.TIMEOUT)
-            } catch (e: IOException) {
-                ConnectionResult.Failure(FailureReason.NETWORK)
-            }
+    private fun Request.Builder.withAuth(baseUrl: String, apiKey: String): Request.Builder =
+        if (baseUrl.contains("anthropic.com", ignoreCase = true)) {
+            header("x-api-key", apiKey.trim())
+                .header("anthropic-version", "2023-06-01")
+        } else {
+            header("Authorization", "Bearer ${apiKey.trim()}")
         }
 
     private fun insecureOrInvalid(baseUrl: String): FailureReason =
@@ -183,8 +139,7 @@ class AiClient(
     private fun parseModels(body: String?): List<String> {
         if (body.isNullOrBlank()) return emptyList()
         return runCatching {
-            val root = JSONTokener(body).nextValue()
-            val array: JSONArray? = when (root) {
+            val array: JSONArray? = when (val root = JSONTokener(body).nextValue()) {
                 is JSONArray -> root
                 is JSONObject -> root.optJSONArray("data") ?: root.optJSONArray("models")
                 else -> null
@@ -193,8 +148,11 @@ class AiClient(
 
             buildList {
                 for (i in 0 until array.length()) {
-                    val item = array.optJSONObject(i) ?: continue
-                    val id = item.optString("id").ifBlank { item.optString("name") }
+                    val id = when (val item = array.opt(i)) {
+                        is JSONObject -> item.optString("id").ifBlank { item.optString("name") }
+                        is String -> item
+                        else -> ""
+                    }
                     if (id.isNotBlank()) add(id)
                 }
             }.distinct().sorted()
@@ -207,12 +165,11 @@ class AiClient(
     }
 
     companion object {
-        private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
-
         private fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
-            .callTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            // 整个请求最多 15 秒，避免获取模型时按钮一直转
+            .callTimeout(15, TimeUnit.SECONDS)
             .build()
     }
 }
