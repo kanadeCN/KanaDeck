@@ -16,6 +16,10 @@ data class LlmSettings(
 ) {
     val isConfigured: Boolean
         get() = baseUrl.isNotBlank() && apiKey.isNotBlank() && model.isNotBlank()
+
+    // 防止误打印整个对象时把 key 带进日志
+    override fun toString(): String =
+        "LlmSettings(baseUrl=$baseUrl, apiKey=***, model=$model)"
 }
 
 /**
