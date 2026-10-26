@@ -44,3 +44,6 @@ keystore.properties
 # Build outputs
 app/debug/
 app/release/
+
+# Local dev docs
+AGENTS.md

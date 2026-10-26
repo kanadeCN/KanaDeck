@@ -29,10 +29,21 @@ class NoteRepository(
         val root = DocumentFile.fromTreeUri(context, treeUri)
             ?: return@withContext ImportResult(imported = 0, failed = 0)
 
-        val collected = mutableListOf<Note>()
+        // 只读 path/updatedAt/size，避免把全部笔记正文加载进内存
+        val existing = noteDao.getAllMetadata().associateBy { it.path }
+
+        val discoveredPaths = mutableSetOf<String>()
+        val pending = mutableListOf<Note>()
         var failed = 0
 
-        fun visit(dir: DocumentFile, relativeDir: String) {
+        suspend fun flushPending() {
+            if (pending.isNotEmpty()) {
+                noteDao.insertAll(pending)
+                pending.clear()
+            }
+        }
+
+        suspend fun visit(dir: DocumentFile, relativeDir: String) {
             for (file in dir.listFiles()) {
                 val name = file.name.orEmpty()
 
@@ -51,42 +62,70 @@ class NoteRepository(
 
                 if (!name.endsWith(".md", ignoreCase = true)) continue
 
+                val path = file.uri.toString()
+                discoveredPaths += path
+
+                val lastModified = file.lastModified()
+                val size = file.length()
+                val meta = existing[path]
+
+                // 修改时间和大小都没变：跳过读取正文
+                if (meta != null &&
+                    lastModified > 0 &&
+                    meta.updatedAt == lastModified &&
+                    meta.size == size
+                ) {
+                    continue
+                }
+
                 val relativePath = if (relativeDir.isBlank()) {
                     name
                 } else {
                     "$relativeDir/$name"
                 }
 
-                try {
-                    val content = context.contentResolver
+                val content = try {
+                    context.contentResolver
                         .openInputStream(file.uri)
                         ?.bufferedReader()
                         ?.use { it.readText() }
-                        ?: continue
+                } catch (_: Exception) {
+                    null
+                }
 
-                    collected += Note(
-                        path = file.uri.toString(),
-                        title = extractTitle(name, content),
-                        content = content,
-                        updatedAt = file.lastModified(),
-                        relativePath = relativePath,
-                    )
-                } catch (e: Exception) {
+                // 读取失败时仍保留旧记录（path 已计入 discoveredPaths，不会被清理）
+                if (content == null) {
                     failed++
+                    continue
+                }
+
+                pending += Note(
+                    path = path,
+                    title = extractTitle(name, content),
+                    content = content,
+                    updatedAt = lastModified,
+                    size = size,
+                    relativePath = relativePath,
+                )
+
+                if (pending.size >= INSERT_BATCH_SIZE) {
+                    flushPending()
                 }
             }
         }
 
         visit(root, "")
-        noteDao.insertAll(collected)
+        flushPending()
 
-        // 清理已经从文件夹里删除的笔记（扫描到 0 篇时不动，避免权限异常导致清空）
-        val paths = collected.map { it.path }
-        if (paths.isNotEmpty()) {
-            noteDao.deleteNotIn(paths)
+        // 全量扫描到 0 篇时不动，避免权限异常导致清空；
+        // 按具体路径分批删除，避免 SQLite 变量数量超限。
+        if (discoveredPaths.isNotEmpty()) {
+            (existing.keys - discoveredPaths)
+                .chunked(DELETE_BATCH_SIZE)
+                .forEach { noteDao.deleteByPaths(it) }
         }
 
-        ImportResult(imported = collected.size, failed = failed)
+        ImportResult(imported = discoveredPaths.size - failed, failed = failed)
     }
 
     private fun extractTitle(fileName: String, content: String): String {
@@ -97,5 +136,10 @@ class NoteRepository(
             .orEmpty()
 
         return heading.ifBlank { fileName.substringBeforeLast('.') }
+    }
+
+    companion object {
+        private const val INSERT_BATCH_SIZE = 50
+        private const val DELETE_BATCH_SIZE = 500
     }
 }

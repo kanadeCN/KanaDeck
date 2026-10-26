@@ -14,6 +14,9 @@ interface NoteDao {
     @Query("SELECT * FROM notes ORDER BY updatedAt DESC")
     suspend fun getAll(): List<Note>
 
+    @Query("SELECT path, updatedAt, size FROM notes")
+    suspend fun getAllMetadata(): List<NoteMetadata>
+
     @Query(
         """
         SELECT * FROM notes
@@ -28,6 +31,6 @@ interface NoteDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(notes: List<Note>)
 
-    @Query("DELETE FROM notes WHERE path NOT IN (:paths)")
-    suspend fun deleteNotIn(paths: List<String>)
+    @Query("DELETE FROM notes WHERE path IN (:paths)")
+    suspend fun deleteByPaths(paths: List<String>)
 }

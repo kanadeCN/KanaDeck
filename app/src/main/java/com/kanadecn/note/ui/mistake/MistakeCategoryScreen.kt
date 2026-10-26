@@ -323,50 +323,56 @@ private fun MistakeRow(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            AsyncImage(
-                model = File(mistake.imagePath),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(56.dp)
-                    .clip(MaterialTheme.shapes.small),
-            )
-
-            Column(
+            Row(
                 modifier = Modifier
                     .weight(1f)
                     .clickable(onClick = onOpenDetail),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = mistake.question,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+                AsyncImage(
+                    model = File(mistake.imagePath),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(MaterialTheme.shapes.small),
                 )
-                Text(
-                    text = if (mistake.isCorrect) "判定：正确" else "错因：${mistake.errorType}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (mistake.isCorrect) {
-                        MaterialTheme.appColors.success
-                    } else {
-                        MaterialTheme.colorScheme.error
-                    },
-                )
-                if (mistake.knowledgePoint.isNotBlank()) {
+
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     Text(
-                        text = "知识点：${mistake.knowledgePoint}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
+                        text = mistake.question,
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    Text(
+                        text = if (mistake.isCorrect) "判定：正确" else "错因：${mistake.errorType}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (mistake.isCorrect) {
+                            MaterialTheme.appColors.success
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                    if (mistake.knowledgePoint.isNotBlank()) {
+                        Text(
+                            text = "知识点：${mistake.knowledgePoint}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text(
+                        text = formatTime(mistake.createdAt),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                Text(
-                    text = formatTime(mistake.createdAt),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
 
             Box {
@@ -401,4 +407,4 @@ private fun MistakeRow(
 }
 
 private fun formatTime(millis: Long): String =
-    SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(millis))
+    SimpleDateFormat("yy-MM-dd HH:mm", Locale.getDefault()).format(Date(millis))

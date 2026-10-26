@@ -1,5 +1,6 @@
 package com.kanadecn.note.ui.mistake
 
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -13,9 +14,12 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import com.kanadecn.note.data.local.Mistake
 import com.kanadecn.note.data.mistakes.CategoryStore
 import com.kanadecn.note.data.mistakes.MistakeRecognizer
@@ -26,6 +30,7 @@ import com.kanadecn.note.ui.components.DockDefaults
 import com.kanadecn.note.ui.components.KanaDeckTitle
 import com.kanadecn.note.ui.components.failureMessage
 import kotlinx.coroutines.launch
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,6 +42,7 @@ fun MistakeScreen(
     onOpenSettings: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     var categories by remember { mutableStateOf(categoryStore.allCategories()) }
     var categoryCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
@@ -48,6 +54,8 @@ fun MistakeScreen(
     var errorDetail by remember { mutableStateOf<String?>(null) }
     var draft by remember { mutableStateOf<RecognizedMistake?>(null) }
     var draftImagePath by remember { mutableStateOf<String?>(null) }
+    var cameraUriString by rememberSaveable { mutableStateOf<String?>(null) }
+    var cameraPath by rememberSaveable { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         categories = categoryStore.allCategories()
@@ -55,11 +63,7 @@ fun MistakeScreen(
             .getOrDefault(emptyMap())
     }
 
-    val imagePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia(),
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-
+    fun recognizeImage(uri: Uri, tempFile: File? = null) {
         scope.launch {
             isRecognizing = true
             errorMessage = null
@@ -85,7 +89,26 @@ fun MistakeScreen(
                 errorMessage = "识别失败：${e.message ?: "未知错误"}"
             } finally {
                 isRecognizing = false
+                tempFile?.delete()
             }
+        }
+    }
+
+    val imagePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri != null) recognizeImage(uri)
+    }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture(),
+    ) { success ->
+        val uri = cameraUriString?.let(Uri::parse)
+        val tempFile = cameraPath?.let(::File)
+        if (success && uri != null) {
+            recognizeImage(uri, tempFile)
+        } else {
+            tempFile?.delete()
         }
     }
 
@@ -170,6 +193,26 @@ fun MistakeScreen(
                                     ActivityResultContracts.PickVisualMedia.ImageOnly,
                                 ),
                             )
+                        },
+                        onTakePhoto = {
+                            try {
+                                val dir = File(context.cacheDir, "camera").apply { mkdirs() }
+                                val file = File(
+                                    dir,
+                                    "mistake_${System.currentTimeMillis()}.jpg",
+                                )
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    file,
+                                )
+                                cameraPath = file.absolutePath
+                                cameraUriString = uri.toString()
+                                cameraLauncher.launch(uri)
+                            } catch (e: Exception) {
+                                errorMessage = "无法启动相机"
+                                errorDetail = e.message
+                            }
                         },
                     )
                 }
@@ -280,6 +323,7 @@ private fun AddMistakeCard(
     errorMessage: String?,
     errorDetail: String?,
     onPickImage: () -> Unit,
+    onTakePhoto: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -295,19 +339,44 @@ private fun AddMistakeCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Button(
-                onClick = onPickImage,
-                enabled = !isRecognizing,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                if (isRecognizing) {
+            if (isRecognizing) {
+                // 识别期间隐藏两个入口，避免重复选图；关闭编辑器后自动恢复
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 40.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(18.dp),
                         strokeWidth = 2.dp,
                     )
                     Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "识别中，请勿离开页面…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                Text(if (isRecognizing) "识别中…" else "选择错题图片")
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(
+                        onClick = onTakePhoto,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("拍照上传")
+                    }
+                    Button(
+                        onClick = onPickImage,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("选择图片")
+                    }
+                }
             }
             errorMessage?.let { message ->
                 Text(

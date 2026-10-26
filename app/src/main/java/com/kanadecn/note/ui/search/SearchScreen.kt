@@ -109,7 +109,7 @@ fun SearchScreen(
                 )
 
                 results.isEmpty() -> Text(
-                    text = "没有找到相关笔记",
+                    text = "没有找到相关笔记\n确保您选择了正确的笔记存储路径或输入内容",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp),

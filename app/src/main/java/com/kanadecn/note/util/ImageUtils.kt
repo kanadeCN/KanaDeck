@@ -27,23 +27,33 @@ object ImageUtils {
         jpegQuality: Int = 80,
         webpQuality: Int = 70,
     ): PreparedImage? {
-        val bytes = runCatching {
-            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-        }.getOrNull() ?: return null
-
+        // 只读尺寸，不把原始文件整个读进内存
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        val hasBounds = runCatching {
+            context.contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, bounds)
+                true
+            } ?: false
+        }.getOrDefault(false)
 
+        if (!hasBounds || bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+        // 采样后仍不小于目标尺寸，避免解码出过大的临时位图
         var sampleSize = 1
-        while (bounds.outWidth / sampleSize > maxDimension * 2 ||
-            bounds.outHeight / sampleSize > maxDimension * 2
+        while (bounds.outWidth / (sampleSize * 2) >= maxDimension ||
+            bounds.outHeight / (sampleSize * 2) >= maxDimension
         ) {
             sampleSize *= 2
         }
 
         val options = BitmapFactory.Options().apply { inSampleSize = sampleSize }
-        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
+        val decoded = try {
+            context.contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, options)
+            }
+        } catch (_: Exception) {
+            null
+        } ?: return null
 
         val scale = minOf(
             1f,
