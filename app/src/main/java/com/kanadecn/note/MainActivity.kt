@@ -80,7 +80,6 @@ class MainActivity : ComponentActivity() {
         setContent {
             var themeMode by remember { mutableStateOf(themePreferences.load()) }
             var selectedTabName by rememberSaveable { mutableStateOf(DockTab.NOTES.name) }
-            val selectedTab = DockTab.valueOf(selectedTabName)
 
             val systemDark = isSystemInDarkTheme()
             val darkTheme = when (themeMode) {
@@ -98,6 +97,17 @@ class MainActivity : ComponentActivity() {
                     val backStackEntry by navController.currentBackStackEntryAsState()
                     val currentRoute = backStackEntry?.destination?.route
                     val showDock = currentRoute == null || currentRoute in AppRoute.topLevel
+                    // 顶层页面的选中态以当前路由为准，系统返回跨 tab 时 dock 才能同步
+                    val selectedTab = DockTab.entries
+                        .firstOrNull { it.route == currentRoute }
+                        ?: DockTab.valueOf(selectedTabName)
+
+                    // 路由变化时同步保存的 tab，避免返回/进程恢复后回退到旧选中项
+                    LaunchedEffect(currentRoute) {
+                        DockTab.entries.firstOrNull { it.route == currentRoute }?.let {
+                            selectedTabName = it.name
+                        }
+                    }
 
                     Scaffold(
                         // 系统栏只处理底部导航栏；顶部交给各页面的 TopAppBar

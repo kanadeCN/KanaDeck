@@ -9,8 +9,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -26,6 +29,7 @@ import com.kanadecn.note.data.settings.ThemeMode
 import com.kanadecn.note.ui.components.failureMessage
 import com.kanadecn.note.ui.theme.appColors
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,6 +52,8 @@ fun SettingsScreen(
     var apiKey by remember { mutableStateOf(initial.apiKey) }
     var selectedModel by remember { mutableStateOf(initial.model) }
     var manualModel by remember { mutableStateOf("") }
+    var maxTokens by rememberSaveable { mutableStateOf(initial.maxTokens) }
+    var maxTokensText by rememberSaveable { mutableStateOf(initial.maxTokens.toString()) }
 
     var availableModels by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoadingModels by remember { mutableStateOf(false) }
@@ -238,7 +244,8 @@ fun SettingsScreen(
             )
 
             // ===== 获取模型列表 =====
-            OutlinedButton(
+            val canFetchModels = apiKey.isNotBlank() && !isLoadingModels
+            Button(
                 onClick = {
                     scope.launch {
                         isLoadingModels = true
@@ -269,7 +276,7 @@ fun SettingsScreen(
                         }
                     }
                 },
-                enabled = apiKey.isNotBlank() && !isLoadingModels,
+                enabled = canFetchModels,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 if (isLoadingModels) {
@@ -350,15 +357,81 @@ fun SettingsScreen(
                     saveErrorDetail = null
                 },
                 label = { Text("手动输入模型（可选）") },
-                placeholder = { Text("列表里没有就填这里") },
-                supportingText = { Text("填了就以这里为准") },
+                placeholder = { Text("列表里没有模型再填这里！") },
+                supportingText = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Filled.Warning,
+                            contentDescription = "警示",
+                            tint = MaterialTheme.appColors.warning,
+                            modifier = Modifier.size(14.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("备选项，填了就以这里为准。模型列表无选项大概率上方配置错误。")
+                    }
+                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
 
+            // ===== 最大输出 Token =====
+            Text(
+                text = "最大输出 Token",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = "回答被截断时可调高（256–32768），修改后点「测试并保存」生效。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Slider(
+                    value = maxTokens.toFloat(),
+                    onValueChange = { value ->
+                        val rounded = (value / TOKEN_STEP).roundToInt() * TOKEN_STEP
+                        maxTokens = rounded.coerceIn(
+                            LlmSettings.MIN_MAX_TOKENS,
+                            LlmSettings.MAX_MAX_TOKENS,
+                        )
+                        maxTokensText = maxTokens.toString()
+                    },
+                    valueRange = LlmSettings.MIN_MAX_TOKENS.toFloat()..LlmSettings.MAX_MAX_TOKENS.toFloat(),
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = maxTokensText,
+                    onValueChange = { input ->
+                        val digits = input.filter { it.isDigit() }.take(5)
+                        maxTokensText = digits
+                        digits.toIntOrNull()?.let { value ->
+                            if (value in LlmSettings.MIN_MAX_TOKENS..LlmSettings.MAX_MAX_TOKENS) {
+                                maxTokens = value
+                            }
+                        }
+                    },
+                    label = { Text("Token") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.width(104.dp),
+                )
+            }
+
             // ===== 测试并保存（合并） =====
             Button(
                 onClick = {
+                    val tokensToSave = maxTokensText.toIntOrNull()
+                        ?.coerceIn(
+                            LlmSettings.MIN_MAX_TOKENS,
+                            LlmSettings.MAX_MAX_TOKENS,
+                        )
+                        ?: maxTokens
+                    maxTokens = tokensToSave
+                    maxTokensText = tokensToSave.toString()
+
                     scope.launch {
                         isSaving = true
                         saveMessage = null
@@ -383,6 +456,7 @@ fun SettingsScreen(
                                                 baseUrl = selectedProvider.baseUrl,
                                                 apiKey = apiKey,
                                                 model = modelToUse,
+                                                maxTokens = tokensToSave,
                                             ),
                                         )
                                         saveMessage = "已保存：${selectedProvider.label} · $modelToUse"
@@ -481,6 +555,8 @@ fun SettingsScreen(
         }
     }
 }
+
+private const val TOKEN_STEP = 256
 
 private fun ThemeMode.label(): String = when (this) {
     ThemeMode.SYSTEM -> "跟随系统"

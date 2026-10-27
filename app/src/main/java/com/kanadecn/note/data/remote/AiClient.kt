@@ -144,9 +144,9 @@ class AiClient(
         val endpoint = if (isAnthropic) "$baseUrl/messages" else "$baseUrl/chat/completions"
         val systemPrompt = PromptTemplates.mistakeSystem(categories)
         val payload = if (isAnthropic) {
-            anthropicPayload(settings.model, imageJpeg, systemPrompt)
+            anthropicPayload(settings.model, imageJpeg, systemPrompt, settings.maxTokens)
         } else {
-            openAiPayload(settings.model, imageJpeg, systemPrompt)
+            openAiPayload(settings.model, imageJpeg, systemPrompt, settings.maxTokens)
         }
 
         val request = try {
@@ -212,11 +212,12 @@ class AiClient(
         model: String,
         imageJpeg: ByteArray,
         systemPrompt: String,
+        maxTokens: Int,
     ): String {
         val dataUrl = "data:image/jpeg;base64," + Base64.encodeToString(imageJpeg, Base64.NO_WRAP)
         return JSONObject().apply {
             put("model", model.trim())
-            put("max_tokens", 8192)
+            put("max_tokens", maxTokens)
             put(
                 "messages",
                 JSONArray().apply {
@@ -260,10 +261,11 @@ class AiClient(
         model: String,
         imageJpeg: ByteArray,
         systemPrompt: String,
+        maxTokens: Int,
     ): String {
         return JSONObject().apply {
             put("model", model.trim())
-            put("max_tokens", 8192)
+            put("max_tokens", maxTokens)
             put("system", systemPrompt)
             put(
                 "messages",
